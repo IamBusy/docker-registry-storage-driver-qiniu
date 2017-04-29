@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/docker/distribution/registry/storage/driver/base"
 	storagedriver "github.com/docker/distribution/registry/storage/driver"
-	"github.com/docker/distribution/registry/storage/driver/factory"
 	"net/http"
 
 	"io"
@@ -19,6 +18,9 @@ import (
 	"encoding/base64"
 
 	"qiniupkg.com/x/errors.v7"
+	"github.com/docker/distribution/registry/storage/driver/factory"
+
+	"time"
 )
 
 const driverName  = "qiniu"
@@ -31,16 +33,12 @@ const (
 	paramIsPrivate   = "isprivate"
 	paramZone	 = "zone"
 
-	paramRSHost      = "rshost"
-	paramRSFHost     = "rsfhost"
-	paramAPIHost     = "apihost"
-	paramScheme      = "scheme"
-	paramIoHost      = "iohost"
-	paramUphosts     = "uphosts"
-
 	maxChunkSize     = 4 * 1024 * 1024
 	blockSize        = 4 * 1024 * 1024
 	chunkSize        = 1 * 1024 * 1024   //1M
+
+	delimiter        = "/"
+	listLimit        = 1000
 )
 
 
@@ -127,7 +125,7 @@ func FromParameters(parameters map[string]interface{}) (*Driver,error) {
 	params.IsPrivate = fmt.Sprint(isPrivate) == "true"
 
 	fmt.Print(params)
-	return nil,nil
+	return New(params)
 }
 
 func New(params DriverParameters) (*Driver, error)  {
@@ -233,34 +231,71 @@ func (d *driver) Writer(ctx context.Context, path string, append bool) (storaged
 // Stat retrieves the FileInfo for the given path, including the current size
 // in bytes and the creation time.
 func (d *driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo, error) {
-	return nil,nil
+
+	item, err := d.Bucket.Stat(ctx, path)
+	if err != nil {
+
+		// there is no concept of directory in qiniu
+		// so a path must be either a file or a directory
+		return storagedriver.FileInfoInternal{FileInfoFields: storagedriver.FileInfoFields{
+			Path: path,
+			IsDir: true,
+		}}, nil
+	}
+
+	return storagedriver.FileInfoInternal{FileInfoFields: storagedriver.FileInfoFields{
+		Path: path,
+		IsDir: false,
+		Size: item.Fsize,
+		ModTime: time.Unix(item.PutTime /1e5,0),
+	}}, nil
+
 }
 
 // List returns a list of the objects that are direct descendants of the given path.
-func (d *driver) List(ctx context.Context, opath string) ([]string, error) {
-	return nil,nil
+func (d *driver) List(ctx context.Context, path string) ([]string, error) {
+	if path != delimiter && path[len(path)-1] != delimiter[0] {
+		path = path + delimiter
+	}
+
+	itemLists, dirLists, _, err := d.Bucket.List(ctx, path, delimiter, "", listLimit)
+	if err != nil && err != io.EOF {
+		return nil, err
+	}
+	
+	files := make([]string, 0, len(itemLists) + len(dirLists))
+	for _, value := range itemLists{
+		files = append(files, value.Key)
+	}
+
+	return append(files, dirLists...), nil
+
+
 }
 
-const maxConcurrency = 10
 
 // Move moves an object stored at sourcePath to destPath, removing the original
 // object.
 func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) error {
-	return nil
+	return d.Bucket.Move(ctx, sourcePath, destPath)
 }
 
 // Delete recursively deletes all objects stored at "path" and its subpaths.
 func (d *driver) Delete(ctx context.Context, path string) error {
-	return nil
+	return d.Bucket.Delete(ctx, path)
 }
 
 
 
 // URLFor returns a URL which may be used to retrieve the content stored at the given path.
 // May return an UnsupportedMethodErr in certain StorageDriver implementations.
+// Just a simple implementation
 func (d *driver) URLFor(ctx context.Context, path string, options map[string]interface{}) (string, error) {
-
-	return "", nil
+	baseUrl := d.getBaseUrl(path)
+	if d.Config.IsPrivate {
+		baseUrl = d.Client.MakePrivateUrl(baseUrl, nil)
+	}
+	return baseUrl, nil
 }
 
 
