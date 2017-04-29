@@ -17,6 +17,8 @@ import (
 	"bytes"
 	"qiniupkg.com/api.v7/kodocli"
 	"encoding/base64"
+
+	"qiniupkg.com/x/errors.v7"
 )
 
 const driverName  = "qiniu"
@@ -202,7 +204,7 @@ func (d *driver) Reader(ctx context.Context, path string, offset int64) (io.Read
 // Writer returns a FileWriter which will store the content written to it
 // at the location designated by "path" after the call to Commit.
 func (d *driver) Writer(ctx context.Context, path string, append bool) (storagedriver.FileWriter, error) {
-	exist := d.fileExists(path)
+	exist := d.fileExists(ctx, path)
 
 	if exist {
 		if append {
@@ -215,7 +217,7 @@ func (d *driver) Writer(ctx context.Context, path string, append bool) (storaged
 		}
 	}
 
-	return writer{
+	return &writer{
 		driver: d,
 		key: path,
 		blocks: []block{},
@@ -228,25 +230,59 @@ func (d *driver) Writer(ctx context.Context, path string, append bool) (storaged
 }
 
 
+// Stat retrieves the FileInfo for the given path, including the current size
+// in bytes and the creation time.
+func (d *driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo, error) {
+	return nil,nil
+}
+
+// List returns a list of the objects that are direct descendants of the given path.
+func (d *driver) List(ctx context.Context, opath string) ([]string, error) {
+	return nil,nil
+}
+
+const maxConcurrency = 10
+
+// Move moves an object stored at sourcePath to destPath, removing the original
+// object.
+func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) error {
+	return nil
+}
+
+// Delete recursively deletes all objects stored at "path" and its subpaths.
+func (d *driver) Delete(ctx context.Context, path string) error {
+	return nil
+}
+
+
+
+// URLFor returns a URL which may be used to retrieve the content stored at the given path.
+// May return an UnsupportedMethodErr in certain StorageDriver implementations.
+func (d *driver) URLFor(ctx context.Context, path string, options map[string]interface{}) (string, error) {
+
+	return "", nil
+}
+
+
 //retrieve a url from a path
 func (d *driver) getBaseUrl(path string) string {
 	baseUrl := qiniu.MakeBaseUrl(d.Config.Domain, path)
 	if d.Config.IsPrivate {
-		baseUrl = d.Client.MakePrivateUrl(baseUrl)
+		baseUrl = d.Client.MakePrivateUrl(baseUrl, nil)
 	}
 	return baseUrl
 }
 
-func (d *driver) fileExists(path string) bool  {
-	_,err :=d.Bucket.Stat(path)
-	if err {
+func (d *driver) fileExists(ctx context.Context, path string) bool  {
+	_,err :=d.Bucket.Stat(ctx, path)
+	if err != nil {
 		return true
 	}
 	return false
 }
 
 type block struct {
-	size int64
+	size int
 	data []byte
 	lastCtx string
 	finished bool
@@ -308,7 +344,7 @@ func (w *writer) Close() error {
 	}
 	err := w.flushBlock()
 	if err != nil {
-		error("flush block error")
+		errors.New("flush block error")
 	}
 	return w.mkfile()
 }
@@ -359,15 +395,17 @@ func (w *writer) append(data[]byte)  {
 		! w.blocks[length-1].finished {
 		last := w.blocks[length-1]
 		idx := min(blockSize - last.size,len(data))
-		last.data = append(last.data, data[:idx])
+		last.data = append(last.data, data[:idx]...)
 		data = data[idx:]
 	}
 
 	for len(data) > 0 {
 		sz := min(blockSize, len(data))
-		append(w.blocks,block{
+		dt := make([]byte,sz, blockSize)
+		copy(dt,data[:sz])
+		w.blocks = append(w.blocks,block{
 			size: sz,
-			data: data[:sz],
+			data: dt,
 			finished: false,
 		})
 		data = data[sz:]
@@ -375,8 +413,8 @@ func (w *writer) append(data[]byte)  {
 }
 
 
-func (w *writer) uploadBlock(blk *block)  {
-	w.driver.Uploader.Conn.Call()
+func (w *writer) uploadBlock(blk *block) error  {
+
 	url := w.driver.Client.UpHosts[0] + "/mkblk/" + strconv.Itoa(blk.size)
 	p := blk.data
 	idx := min(blk.size, chunkSize)
@@ -385,9 +423,9 @@ func (w *writer) uploadBlock(blk *block)  {
 	firstChunk := p[:idx]
 	p = p[idx:]
 	body := bytes.NewReader(firstChunk)
-	nextChunkInfo, err := request("POST", url, "application/octet-stream", body, idx)
+	nextChunkInfo, err := request("POST", url, "application/octet-stream", body, int64(idx))
 	if err != nil {
-		return nil, err
+		return  err
 	}
 
 	//upload chunk
@@ -397,16 +435,17 @@ func (w *writer) uploadBlock(blk *block)  {
 		p = p[idx:]
 		body = bytes.NewReader(chunk)
 
-		url = nextChunkInfo["host"] + "/bput/" + nextChunkInfo["ctx"] + "/" + strconv.FormatUint(uint64(nextChunkInfo["offset"]), 10)
+		url = nextChunkInfo["host"] + "/bput/" + nextChunkInfo["ctx"] + "/" + nextChunkInfo["offset"]
 
-		nextChunkInfo, err =request("POST", url, "application/octet-stream", body, idx)
+		nextChunkInfo, err =request("POST", url, "application/octet-stream", body, int64(idx))
 		if err != nil {
-			return nil, err
+			return err
 		}
 	}
 
 	blk.finished = true
 	blk.lastCtx = nextChunkInfo["ctx"]
+	return nil
 
 }
 
@@ -431,6 +470,6 @@ func (w *writer) mkfile() error {
 	url := w.driver.Client.UpHosts[0] + "/mkfile/" +
 		strconv.FormatInt(w.size, 10) +
 		"/key/" + base64.URLEncoding.EncodeToString([]byte(w.key))
-	_, err := request("POST", url, "application/octet-stream", bytes.NewReader(content), len(content))
+	_, err := request("POST", url, "application/octet-stream", bytes.NewReader([]byte(content)), int64(len(content)))
 	return err
 }
