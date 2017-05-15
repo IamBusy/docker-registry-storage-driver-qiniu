@@ -18,6 +18,8 @@ func Test(t *testing.T) { check.TestingT(t) }
 
 var qiniuDriverConstructor func(rootDirectory string) (*Driver, error)
 
+var skipCheck func() string
+
 func init() {
 	accessKey := os.Getenv("QINIU_ACCOUNT_NAME")
 	secretKey := os.Getenv("QINIU_ACCOUNT_KEY")
