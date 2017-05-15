@@ -2,24 +2,18 @@ package qiniu
 
 import (
 	qiniu "qiniupkg.com/api.v7/kodo"
-
 	"github.com/docker/distribution/context"
-
 	"fmt"
 	"github.com/docker/distribution/registry/storage/driver/base"
 	storagedriver "github.com/docker/distribution/registry/storage/driver"
 	"net/http"
-
 	"io"
 	"strconv"
-
 	"bytes"
 	"qiniupkg.com/api.v7/kodocli"
 	"encoding/base64"
-
 	"qiniupkg.com/x/errors.v7"
 	"github.com/docker/distribution/registry/storage/driver/factory"
-
 	"time"
 )
 
@@ -47,6 +41,8 @@ const (
 //DriverParameters A struct that encapsulates all of the driver parameters after all values have been set
 type DriverParameters struct {
 	qiniu.Config
+	AccessKey string
+	SecretKey string
 	Bucket string
 	Zone int
 	Domain string
@@ -262,15 +258,13 @@ func (d *driver) List(ctx context.Context, path string) ([]string, error) {
 	if err != nil && err != io.EOF {
 		return nil, err
 	}
-	
+
 	files := make([]string, 0, len(itemLists) + len(dirLists))
 	for _, value := range itemLists{
 		files = append(files, value.Key)
 	}
 
 	return append(files, dirLists...), nil
-
-
 }
 
 
