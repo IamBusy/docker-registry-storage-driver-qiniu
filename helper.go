@@ -6,6 +6,9 @@ import (
 	"io"
 	"strings"
 	"qiniupkg.com/x/errors.v7"
+	"fmt"
+	"io/ioutil"
+	"qiniupkg.com/api.v7/kodo"
 )
 
 func max(x, y int) int {
@@ -22,22 +25,35 @@ func min(x, y int) int  {
 	return x
 }
 
-func request(method string, url string, bodyType string, body io.Reader, bodyLength int64 ) (map[string]string, error) {
+func request(method string, url string, bodyType string, token string, body io.Reader, bodyLength int64 ) (map[string]interface{}, error) {
 	req, err := newRequest(method, url, body)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Content-Type", bodyType)
+	if token != "" {
+		req.Header.Set("Authorization", token)
+	}
 	req.ContentLength = int64(bodyLength)
 	client := http.Client{}
 	resp, err := client.Do(req)
-	res := make([]byte,resp.ContentLength)
-	resp.Body.Read(res)
-	var resMap map[string]string
-	err = json.Unmarshal(res,resMap)
 	if err != nil {
+		return nil, err;
+	}
+	res := make([]byte,resp.ContentLength)
+	res, err = ioutil.ReadAll(resp.Body)
+	fmt.Println(string(res))
+	var resMap map[string]interface{}
+	err = json.Unmarshal(res,&resMap)
+	if err != nil {
+		fmt.Println("helper.request:",err)
 		return nil, errors.New("json unmarshal error")
 	}
+	//rtn := map[string]string{}
+	////var s string
+	//for k, v := range resMap {
+	//	rtn[k] = v.(string)
+	//}
 	return resMap, nil
 }
 
@@ -68,4 +84,15 @@ func newRequest(method, url1 string, body io.Reader) (req *http.Request, err err
 		req.Host = host
 	}
 	return
+}
+
+func newUptoken(p kodo.Bucket, key string) string {
+	policy := &kodo.PutPolicy{
+		Scope:   p.Name + ":" + key,
+		Expires: 3600 * 24,
+		UpHosts: p.UpHosts,
+	}
+	token := p.Conn.MakeUptoken(policy)
+	fmt.Println("newUptoken:",token)
+	return token
 }
