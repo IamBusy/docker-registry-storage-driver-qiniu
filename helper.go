@@ -42,7 +42,7 @@ func request(method string, url string, bodyType string, token string, body io.R
 	}
 	res := make([]byte,resp.ContentLength)
 	res, err = ioutil.ReadAll(resp.Body)
-	fmt.Println(string(res))
+	fmt.Println("request.responseBody=",string(res))
 	var resMap map[string]interface{}
 	err = json.Unmarshal(res,&resMap)
 	if err != nil {

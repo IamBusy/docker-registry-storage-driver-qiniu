@@ -12,6 +12,8 @@ import (
 	//"gopkg.in/check.v1"
 	"testing"
 	"fmt"
+	"bufio"
+	"io"
 )
 
 var (
@@ -115,25 +117,43 @@ func TestDriver_Name(t *testing.T) {
 //}
 
 func TestDriver_Writer(t *testing.T) {
-
-	writer, err := d.Writer(nil,"/docker/testWriter",false)
+	f, err := os.Open("/Users/william/Downloads/test.pptx")
+	defer f.Close()
 	if err != nil {
 		t.Error(err)
 	}
 
-	length, err := writer.Write([]byte("testWriter"))
+	writer, err := d.Writer(nil,"/docker/testWriter2.pptx",false)
 	if err != nil {
 		t.Error(err)
 	}
+
+	buffer := make([]byte, 1024*1024)
+	reader := bufio.NewReader(f)
+	//offset := int64(1024*1024)
+	num := 0
+	for {
+		n,err := reader.Read(buffer)
+		if err != nil && err != io.EOF{
+			panic(err)
+		}
+		if 0 ==n {break}
+		num+= n
+
+		writer.Write(buffer[0:n])
+	}
+	fmt.Println(num)
+
 	err = writer.Commit()
 	if err != nil {
 		t.Error(err)
 	}
+	fmt.Println("before close")
 	err = writer.Close()
 	if err != nil {
 		t.Error(err)
 	}
-	fmt.Print(length)
+	fmt.Println("finish")
 }
 
 //func Test(t *testing.T) { check.TestingT(t) }

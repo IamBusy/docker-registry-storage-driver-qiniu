@@ -321,7 +321,6 @@ func (d *driver) getBaseUrl(path string) string {
 
 func (d *driver) fileExists(ctx context.Context, path string) bool  {
 	_,err :=d.Bucket.Stat(ctx, path)
-	fmt.Println(err.Error())
 	if err != nil {
 		//err = errors.Info(err)
 		return false
@@ -352,7 +351,7 @@ func newBlock() block {
 type writer struct {
 	driver      *driver
 	key         string
-	blocks      []block
+	blocks      []*block
 	size        int64
 	readyPart   []byte
 	pendingPart []byte
@@ -369,7 +368,7 @@ func (d *driver) newWriter(path string) (storagedriver.FileWriter, error) {
 		driver: d,
 		key:    path,
 		size:   0,
-		blocks: []block{},
+		blocks: []*block{},
 		uptoken: "UpToken "+newUptoken(d.Bucket, path),
 	}, nil
 }
@@ -405,7 +404,7 @@ func (w *writer) Close() error {
 	}
 	// There should be no more than 1 block need to be uploaded
 	if len(w.blocks) > 0 && w.blocks[0].finished == false {
-		err = w.uploadBlock(&w.blocks[0])
+		err = w.uploadBlock(w.blocks[0])
 		if err != nil {
 			return err
 		}
@@ -436,6 +435,7 @@ func (w *writer) Commit() error {
 	} else if w.cancelled {
 		return fmt.Errorf("already cancelled")
 	}
+	fmt.Println("commit:","block size=",len(w.blocks))
 
 	return w.flushBlock()
 }
@@ -443,13 +443,13 @@ func (w *writer) Commit() error {
 // flush buffers to write
 // Only not full block will be flushed
 func (w *writer) flushBlock() error {
-	tryTime := 3
+	tryTime := 2
 	for i := 0; i < len(w.blocks); i++ {
 		if len(w.blocks[i].data) == blockSize && w.blocks[i].finished == false {
 			// Try 3 time to upload the block if failed
 			tryTime = 2
 			for ;tryTime >= 0 ; tryTime-- {
-				err := w.uploadBlock(&w.blocks[i])
+				err := w.uploadBlock(w.blocks[i])
 				if err == nil {
 					w.ctxs = append(w.ctxs, []byte(w.blocks[i].lastCtx))
 					w.blocks[i].finished = true
@@ -473,13 +473,16 @@ func (w *writer) flushBlock() error {
 
 func (w *writer) append(data[]byte)  {
 	length := len(w.blocks)
+	fmt.Println("append: block size=",length)
 
 	//complement the last block
 	if length > 0 &&
 		w.blocks[length-1].size < blockSize {
 		last := w.blocks[length-1]
+		fmt.Println("append:last block size=",len(last.data))
 		idx := min(blockSize - last.size,len(data))
 		last.data = append(last.data, data[:idx]...)
+		last.size += idx
 		data = data[idx:]
 	}
 
@@ -487,7 +490,7 @@ func (w *writer) append(data[]byte)  {
 		sz := min(blockSize, len(data))
 		dt := make([]byte,sz, blockSize)
 		copy(dt,data[:sz])
-		w.blocks = append(w.blocks,block{
+		w.blocks = append(w.blocks,&block{
 			size: sz,
 			data: dt,
 			finished: false,
@@ -495,7 +498,7 @@ func (w *writer) append(data[]byte)  {
 		data = data[sz:]
 	}
 
-	fmt.Println(w.blocks)
+	// fmt.Println(w.blocks)
 }
 
 
@@ -526,7 +529,7 @@ func (w *writer) uploadBlock(blk *block) error  {
 		p = p[idx:]
 		body = bytes.NewReader(chunk)
 
-		url = nextChunkInfo["host"].(string) + "/bput/" + nextChunkInfo["ctx"].(string) + "/" + nextChunkInfo["offset"].(string)
+		url = nextChunkInfo["host"].(string) + "/bput/" + nextChunkInfo["ctx"].(string) + "/" + strconv.FormatInt(int64(nextChunkInfo["offset"].(float64)),10)
 
 		nextChunkInfo, err =request("POST", url, "application/octet-stream", w.uptoken, body, int64(idx))
 		if err != nil {
@@ -534,11 +537,10 @@ func (w *writer) uploadBlock(blk *block) error  {
 		}
 	}
 
-	fmt.Println("uploadBlock.restChunk")
 
 	blk.finished = true
 	blk.lastCtx = nextChunkInfo["ctx"].(string)
-	fmt.Println("uploadBlock:blockInfo=",blk)
+
 	return nil
 
 }
@@ -550,14 +552,26 @@ func (w *writer) mkfile() error {
 	}
 
 	content := bytes.Join(w.ctxs,[]byte(","))
+	fmt.Println("mkfile.ctxs=",string(content))
 
 	fmt.Println("mkfile:filesize=",strconv.FormatInt(w.size, 10))
 
 	url := w.driver.Client.UpHosts[0] + "/mkfile/" +
 		strconv.FormatInt(w.size, 10) +
-		"/key/" + base64.URLEncoding.EncodeToString([]byte(w.key))
-	res, err := request("POST", url, "application/octet-stream", w.uptoken, bytes.NewReader([]byte(content)), int64(len(content)))
-	fmt.Println("mkfile: error=",err)
+		"/key/" + base64.URLEncoding.EncodeToString([]byte(w.key)) +
+		"/mimeType/" + base64.URLEncoding.EncodeToString([]byte("application/octet-stream"))
+
+
+	fmt.Println("url=",url)
+	res, err := request("POST", url, "text/plain", w.uptoken, bytes.NewReader([]byte(content)), int64(len(content)))
+	if err != nil {
+		return err
+	}
+	_, exist := res["key"]
+
+	if !exist {
+		return errors.New("Make file fail")
+	}
 	fmt.Println("mkfile: conent=",res)
 	return err
 }
